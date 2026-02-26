@@ -38,6 +38,18 @@ type Portfolio = {
   repos: Repo[]
 }
 
+type KnowledgeBase = {
+  username: string
+  skills: string[]
+  repos: {
+    name: string
+    description: string | null
+    readme: string | null
+    language: string | null
+    topics: string[]
+  }[]
+}
+
 class RateLimitError extends Error {
   resetAt: number
   constructor(message: string, resetAt: number) {
@@ -127,6 +139,119 @@ const buildSummary = (profile: Profile, repos: Repo[]) => {
   }
 
   return { lines, suggestions }
+}
+
+const extractKeywords = (text: string) => {
+  const stop = new Set([
+    'the',
+    'and',
+    'for',
+    'with',
+    'this',
+    'that',
+    'from',
+    'into',
+    'your',
+    'you',
+    'about',
+    'using',
+    'uses',
+    'used',
+    'use',
+    'project',
+    'projects',
+    'build',
+    'built',
+    'create',
+    'creating',
+    'app',
+    'apps',
+    'repo',
+    'repository'
+  ])
+  const tokens = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s+#.-]/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length > 2 && !stop.has(token))
+  return Array.from(new Set(tokens))
+}
+
+const buildKnowledgeBase = async (
+  username: string,
+  repos: Repo[]
+): Promise<KnowledgeBase> => {
+  const targets = repos.slice()
+
+  const readmes = await Promise.all(
+    targets.map(async (repo) => {
+      const readme = await fetchGitHubText(
+        `${API_BASE}/repos/${repo.full_name}/readme`,
+        {
+          headers: {
+            Accept: 'application/vnd.github.v3.raw'
+          }
+        },
+        { allowNotFound: true }
+      )
+      return readme
+    })
+  )
+
+  const repoData = targets.map((repo, index) => ({
+    name: repo.name,
+    description: repo.description,
+    readme: readmes[index],
+    language: repo.language,
+    topics: []
+  }))
+
+  const skillSet = new Set<string>()
+  repoData.forEach((repo) => {
+    if (repo.language) skillSet.add(repo.language)
+    if (repo.description) {
+      extractKeywords(repo.description).forEach((keyword) => skillSet.add(keyword))
+    }
+    if (repo.readme) {
+      extractKeywords(repo.readme).slice(0, 40).forEach((keyword) => skillSet.add(keyword))
+    }
+  })
+
+  return {
+    username,
+    skills: Array.from(skillSet).slice(0, 60),
+    repos: repoData
+  }
+}
+
+const buildMockResponse = (kb: KnowledgeBase | null, input: string) => {
+  if (!kb) {
+    return 'Knowledge base is still loading. Try again in a moment.'
+  }
+  const query = input.toLowerCase()
+  const queryTerms = extractKeywords(query)
+  if (queryTerms.length === 0) {
+    return 'Ask about specific skills, tools, or repo topics.'
+  }
+
+  const skillMatches = kb.skills.filter((skill) => query.includes(skill.toLowerCase()))
+  const repoMatches = kb.repos.filter((repo) => {
+    const haystack = `${repo.name} ${repo.description ?? ''} ${repo.readme ?? ''}`.toLowerCase()
+    return queryTerms.some((term) => haystack.includes(term))
+  })
+
+  if (repoMatches.length > 0) {
+    const names = repoMatches.slice(0, 3).map((repo) => repo.name)
+    return `Yes — I found relevant signals in ${names.join(
+      ', '
+    )}. Ask me to summarize a specific repo.`
+  }
+
+  if (skillMatches.length > 0) {
+    return `Likely experience with ${skillMatches.slice(0, 5).join(', ')} based on repo metadata and README content.`
+  }
+
+  return 'No strong signals yet. Try asking about a specific language, framework, or repo name.'
 }
 
 const formatCountdown = (ms: number) => {
@@ -238,11 +363,32 @@ export default function App() {
   const [rateLimitReset, setRateLimitReset] = useState<number | null>(null)
   const [now, setNow] = useState(Date.now())
   const [rateStatus, setRateStatus] = useState<RateLimitStatus | null>(null)
+  const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase | null>(null)
+  const [kbLoading, setKbLoading] = useState(false)
+  const [chatInput, setChatInput] = useState('')
+  const [botOpen, setBotOpen] = useState(false)
+  const [modalPos, setModalPos] = useState<{ x: number; y: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const [messages, setMessages] = useState<
+    { id: string; role: 'user' | 'bot'; content: string }[]
+  >([
+    {
+      id: 'welcome',
+      role: 'bot',
+      content:
+        "Recruiter bot online. Ask me about skills, tools, or specific repositories."
+    }
+  ])
+  const [deepScanEnabled, setDeepScanEnabled] = useState(true)
   const filterRef = useRef<HTMLDivElement | null>(null)
   const shareRef = useRef<HTMLDivElement | null>(null)
+  const modalRef = useRef<HTMLDivElement | null>(null)
+  const dragOffset = useRef<{ x: number; y: number } | null>(null)
 
   const canSearch = username.trim().length > 1
   const rateLimited = rateLimitReset !== null && now < rateLimitReset
+  const hasReadme = Boolean(portfolio?.readmeHtml)
+  const graphCells = useMemo(() => Array.from({ length: 56 }, (_, i) => i), [])
 
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
@@ -253,12 +399,16 @@ export default function App() {
       if (shareOpen && shareRef.current && !shareRef.current.contains(target)) {
         setShareOpen(false)
       }
+      if (botOpen && modalRef.current && !modalRef.current.contains(target)) {
+        setBotOpen(false)
+      }
     }
 
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setFilterOpen(false)
         setShareOpen(false)
+        setBotOpen(false)
       }
     }
 
@@ -268,7 +418,28 @@ export default function App() {
       document.removeEventListener('mousedown', handleClick)
       document.removeEventListener('keydown', handleKey)
     }
-  }, [filterOpen, shareOpen])
+  }, [filterOpen, shareOpen, botOpen])
+
+  useEffect(() => {
+    if (!dragging) return
+    const handleMove = (event: MouseEvent) => {
+      if (!dragOffset.current) return
+      setModalPos({
+        x: event.clientX - dragOffset.current.x,
+        y: event.clientY - dragOffset.current.y
+      })
+    }
+    const handleUp = () => {
+      setDragging(false)
+      dragOffset.current = null
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+  }, [dragging])
 
   useEffect(() => {
     if (!rateLimitReset && rateStatus?.remaining !== 0) return
@@ -331,6 +502,18 @@ export default function App() {
     setFilterOpen(false)
     setShareOpen(false)
     setRateLimitReset(null)
+    setKnowledgeBase(null)
+    setBotOpen(false)
+    setModalPos(null)
+    setMessages([
+      {
+        id: 'welcome',
+        role: 'bot',
+        content:
+          "Recruiter bot online. Ask me about skills, tools, or specific repositories."
+      }
+    ])
+    setDeepScanEnabled(true)
 
     try {
       const profile = (await fetchGitHubJson<Profile>(`${API_BASE}/users/${handle}`)) as Profile
@@ -342,15 +525,6 @@ export default function App() {
         `${API_BASE}/users/${handle}/repos?per_page=100&sort=updated`
       )) as Repo[]
       const nonForks = repos.filter((repo) => !repo.fork)
-      const ranked = (nonForks.length >= 3 ? nonForks : repos)
-        .slice()
-        .sort((a, b) => {
-          if (b.stargazers_count !== a.stargazers_count) {
-            return b.stargazers_count - a.stargazers_count
-          }
-          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-        })
-        .slice(0, 3)
 
       const readmeHtml = await fetchGitHubText(
         `${API_BASE}/repos/${handle}/${handle}/readme`,
@@ -422,6 +596,36 @@ export default function App() {
     return sorted.slice(0, 3)
   }, [repoCandidates, repoSort])
 
+  useEffect(() => {
+    if (!portfolio) return
+    let cancelled = false
+    const loadKB = async () => {
+      setKbLoading(true)
+      try {
+        const sourceRepos = deepScanEnabled
+          ? portfolio.repos
+          : portfolio.repos
+              .slice()
+              .sort((a, b) => b.stargazers_count - a.stargazers_count)
+              .slice(0, 10)
+        const kb = await buildKnowledgeBase(portfolio.profile.login, sourceRepos)
+        if (!cancelled) {
+          setKnowledgeBase(kb)
+        }
+      } catch (err) {
+        if (err instanceof RateLimitError) {
+          setRateLimitReset(err.resetAt)
+        }
+      } finally {
+        if (!cancelled) setKbLoading(false)
+      }
+    }
+    loadKB()
+    return () => {
+      cancelled = true
+    }
+  }, [portfolio, deepScanEnabled])
+
   const getInlineStyles = async () => {
     let css = ''
     document.querySelectorAll('style').forEach((style) => {
@@ -472,7 +676,8 @@ export default function App() {
         repos: visibleRepos,
         readmeHtml: portfolio.readmeHtml,
         username: lastSearched,
-        repoSort: repoSort.label
+        repoSort: repoSort.label,
+        knowledgeBase
       }
       const html = `<!doctype html>
 <html lang="en">
@@ -500,6 +705,7 @@ ${css}
       const profile = data.profile;
       const repos = data.repos || [];
       const about = data.readmeHtml || '<p class="muted">No profile README found.</p>';
+      const kb = data.knowledgeBase;
       const links = [
         { label: 'GitHub', href: profile.html_url },
         profile.blog ? { label: 'Website', href: profile.blog.startsWith('http') ? profile.blog : 'https://' + profile.blog } : null,
@@ -561,6 +767,19 @@ ${css}
           </div>
           <div class="repo-list">\${repoHtml}</div>
         </article>
+        <article class="panel terminal">
+          <div class="panel-header">
+            <div>
+              <h3>Recruiter Terminal</h3>
+              <span class="muted">Static export (mock responses)</span>
+            </div>
+          </div>
+          <div class="terminal-shell">
+            <div class="terminal-line">kb.skills: \${kb ? kb.skills.length : 0}</div>
+            <div class="terminal-line">kb.repos: \${kb ? kb.repos.length : 0}</div>
+            <div class="terminal-line">Ask interactive questions in the live app.</div>
+          </div>
+        </article>
       \`;
     </script>
   </body>
@@ -616,38 +835,40 @@ ${css}
 
   return (
     <div className="page">
-      <div className="top-actions" ref={shareRef}>
-        <button
-          type="button"
-          className="icon-button"
-          onClick={() => setShareOpen((prev) => !prev)}
-        >
-          <span>Share</span>
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M16 5l3 3-3 3M19 8H9a4 4 0 0 0-4 4v7"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
-        {shareOpen && (
-          <div className="menu">
-            <button type="button" onClick={downloadZip} disabled={shareBusy}>
-              Download ZIP
-            </button>
-            <button type="button" onClick={downloadPdf} disabled={shareBusy}>
-              Save as PDF
-            </button>
-            <button type="button" onClick={downloadImage} disabled={shareBusy}>
-              Save as Image
-            </button>
-          </div>
-        )}
-      </div>
+      {portfolio && (
+        <div className="top-actions" ref={shareRef}>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => setShareOpen((prev) => !prev)}
+          >
+            <span>Share profile</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M16 5l3 3-3 3M19 8H9a4 4 0 0 0-4 4v7"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+          {shareOpen && (
+            <div className="menu">
+              <button type="button" onClick={downloadZip} disabled={shareBusy}>
+                Download ZIP
+              </button>
+              <button type="button" onClick={downloadPdf} disabled={shareBusy}>
+                Save as PDF
+              </button>
+              <button type="button" onClick={downloadImage} disabled={shareBusy}>
+                Save as Image
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       {rateLimited && (
         <div className="toast" role="status">
           <strong>GitHub is taking a breather! ☕</strong>
@@ -664,8 +885,8 @@ ${css}
           <h1>Turn a username into a sharp, shareable portfolio.</h1>
           <p className="subhead">
             Pull public GitHub data into a sleek portfolio: profile stats, README-based
-            About, AI summary, and top repos with filters for stars, activity, forks,
-            and commit rate.
+            About, AI summary, top repos with filters, and an interactive recruiter
+            terminal.
           </p>
           <RateLimitStatus status={rateStatus} now={now} />
         </div>
@@ -718,8 +939,8 @@ ${css}
 
         {portfolio && (
           <section className="grid" id="portfolio-result">
-            <div className="stack">
-              <article className="panel profile" data-export="profile">
+            <div className="column">
+              <article className="card profile" data-export="profile">
                 <div className="profile-header">
                   <img src={portfolio.profile.avatar_url} alt={portfolio.profile.login} />
                   <div>
@@ -777,101 +998,310 @@ ${css}
                 )}
               </article>
 
-              <article className="panel repos" data-export="repos">
+              <article className="card about">
                 <div className="panel-header">
                   <div>
-                    <h3>Top repositories</h3>
-                    <span className="muted">{repoSort.label}</span>
-                  </div>
-                  <div className="repo-controls" ref={filterRef}>
-                    <button
-                      type="button"
-                      className="icon-button"
-                      onClick={() => setFilterOpen((prev) => !prev)}
-                    >
-                      <span>Filter</span>
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                          d="M4 6h16M7 12h10M10 18h4"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.6"
-                          strokeLinecap="round"
-                        />
-                      </svg>
-                    </button>
-                    {filterOpen && (
-                      <div className="menu">
-                        {REPO_SORTS.map((sort) => (
-                          <button
-                            key={sort.id}
-                            type="button"
-                            className={repoSort.id === sort.id ? 'is-active' : ''}
-                            onClick={() => {
-                              setRepoSort(sort)
-                              setFilterOpen(false)
-                            }}
-                          >
-                            {sort.label}
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                    <h3>About</h3>
+                    {lastSearched && <span className="muted">@{lastSearched}</span>}
                   </div>
                 </div>
-                <div className="repo-list">
-                  {visibleRepos.map((repo) => (
-                    <div className="repo-card" key={repo.id}>
-                      <div className="repo-title">
-                        <a href={repo.html_url} target="_blank" rel="noreferrer">
-                          {repo.name}
-                        </a>
-                        <span className="stars">★ {repo.stargazers_count}</span>
-                      </div>
-                      <p className="muted">
-                        {repo.description ?? 'No description available yet.'}
-                      </p>
-                      <div className="repo-meta">
-                        {repo.language && <span>{repo.language}</span>}
-                        <span>Updated {formatDate(repo.updated_at)}</span>
-                        {repo.homepage && (
-                          <a href={repo.homepage} target="_blank" rel="noreferrer">
-                            Live demo
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </article>
-
-            </div>
-
-            <article className="panel about">
-              <div className="panel-header">
-                <div>
-                  <h3>About</h3>
-                  {lastSearched && <span className="muted">@{lastSearched}</span>}
-                </div>
-              </div>
-              {portfolio.readmeHtml ? (
-                <>
+                {portfolio.readmeHtml ? (
                   <div
                     className="about-body is-expanded"
                     dangerouslySetInnerHTML={{ __html: portfolio.readmeHtml }}
                   />
-                </>
-              ) : (
-                <p className="muted">
-                  No profile README found. Add a README.md to the{' '}
-                  <span className="mono">{portfolio.profile.login}</span> repository to
-                  show a full About section.
-                </p>
+                ) : (
+                  <div className="about-fallback">
+                    <p className="muted">
+                      No profile README found. Add a README.md to the{' '}
+                      <span className="mono">{portfolio.profile.login}</span> repository
+                      to show a full About section.
+                    </p>
+                    {portfolio.profile.bio ? (
+                      <p className="bio-extended">{portfolio.profile.bio}</p>
+                    ) : (
+                      <p className="muted">Add a short bio to highlight your focus.</p>
+                    )}
+                  </div>
+                )}
+              </article>
+
+              {!hasReadme && (
+                <article className="card repos" data-export="repos">
+                  <div className="panel-header">
+                    <div>
+                      <h3>Top repositories</h3>
+                      <span className="muted">{repoSort.label}</span>
+                    </div>
+                    <div className="repo-controls" ref={filterRef}>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        onClick={() => setFilterOpen((prev) => !prev)}
+                      >
+                        <span>Filter</span>
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M4 6h16M7 12h10M10 18h4"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      </button>
+                      {filterOpen && (
+                        <div className="menu">
+                          {REPO_SORTS.map((sort) => (
+                            <button
+                              key={sort.id}
+                              type="button"
+                              className={repoSort.id === sort.id ? 'is-active' : ''}
+                              onClick={() => {
+                                setRepoSort(sort)
+                                setFilterOpen(false)
+                              }}
+                            >
+                              {sort.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="repo-list">
+                    {visibleRepos.map((repo) => (
+                      <div className="repo-card" key={repo.id}>
+                        <div className="repo-title">
+                          <a href={repo.html_url} target="_blank" rel="noreferrer">
+                            {repo.name}
+                          </a>
+                          <span className="stars">★ {repo.stargazers_count}</span>
+                        </div>
+                        <p className="muted">
+                          {repo.description ?? 'No description available yet.'}
+                        </p>
+                        <div className="repo-meta">
+                          {repo.language && <span>{repo.language}</span>}
+                          <span>Updated {formatDate(repo.updated_at)}</span>
+                          {repo.homepage && (
+                            <a href={repo.homepage} target="_blank" rel="noreferrer">
+                              Live demo
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
               )}
-            </article>
+
+              {!hasReadme && (
+                <article className="card graph">
+                  <div className="panel-header">
+                    <div>
+                      <h3>Contribution Graph</h3>
+                      <span className="muted">Preview placeholder</span>
+                    </div>
+                  </div>
+                  <div className="graph-grid">
+                    {graphCells.map((cell) => (
+                      <span key={cell} className="graph-cell" />
+                    ))}
+                  </div>
+                </article>
+              )}
+            </div>
+
+            <div className="column">
+              {hasReadme && (
+                <article className="card repos" data-export="repos">
+                  <div className="panel-header">
+                    <div>
+                      <h3>Top repositories</h3>
+                      <span className="muted">{repoSort.label}</span>
+                    </div>
+                    <div className="repo-controls" ref={filterRef}>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        onClick={() => setFilterOpen((prev) => !prev)}
+                      >
+                        <span>Filter</span>
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M4 6h16M7 12h10M10 18h4"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      </button>
+                      {filterOpen && (
+                        <div className="menu">
+                          {REPO_SORTS.map((sort) => (
+                            <button
+                              key={sort.id}
+                              type="button"
+                              className={repoSort.id === sort.id ? 'is-active' : ''}
+                              onClick={() => {
+                                setRepoSort(sort)
+                                setFilterOpen(false)
+                              }}
+                            >
+                              {sort.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="repo-list">
+                    {visibleRepos.map((repo) => (
+                      <div className="repo-card" key={repo.id}>
+                        <div className="repo-title">
+                          <a href={repo.html_url} target="_blank" rel="noreferrer">
+                            {repo.name}
+                          </a>
+                          <span className="stars">★ {repo.stargazers_count}</span>
+                        </div>
+                        <p className="muted">
+                          {repo.description ?? 'No description available yet.'}
+                        </p>
+                        <div className="repo-meta">
+                          {repo.language && <span>{repo.language}</span>}
+                          <span>Updated {formatDate(repo.updated_at)}</span>
+                          {repo.homepage && (
+                            <a href={repo.homepage} target="_blank" rel="noreferrer">
+                              Live demo
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              )}
+            </div>
           </section>
         )}
       </main>
+
+      <button
+        type="button"
+        className="fab"
+        onClick={() => setBotOpen(true)}
+        aria-label="Open recruiter bot"
+      >
+        <span>Bot</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M7 9h10M7 13h6M12 3a7 7 0 0 1 7 7v5a3 3 0 0 1-3 3h-6l-3 3v-3a4 4 0 0 1-4-4v-4a7 7 0 0 1 7-7z"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+
+      {botOpen && (
+        <div className="modal-overlay">
+          <div
+            className="modal"
+            ref={modalRef}
+            style={
+              modalPos
+                ? { transform: `translate(${modalPos.x}px, ${modalPos.y}px)` }
+                : undefined
+            }
+          >
+            <div
+              className="modal-header drag-handle"
+              onMouseDown={(event) => {
+                if (!modalRef.current) return
+                const rect = modalRef.current.getBoundingClientRect()
+                dragOffset.current = {
+                  x: event.clientX - rect.left,
+                  y: event.clientY - rect.top
+                }
+                setDragging(true)
+              }}
+            >
+              <div>
+                <h3>Recruiter Terminal</h3>
+                <span className="muted">
+                  {kbLoading ? 'Building knowledge base…' : 'Mock AI ready'}
+                </span>
+              </div>
+              <div className="modal-actions">
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={deepScanEnabled}
+                    onChange={(event) => setDeepScanEnabled(event.target.checked)}
+                  />
+                  <span className="toggle-track">
+                    <span className="toggle-thumb" />
+                  </span>
+                  <span className="toggle-label">Deep Scan</span>
+                </label>
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => setBotOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="terminal-shell">
+              <div className="terminal-line">
+                {knowledgeBase
+                  ? `Loaded ${knowledgeBase.skills.length} skills from ${knowledgeBase.repos.length} repos.`
+                  : 'Initializing knowledge base...'}
+              </div>
+              {messages.map((message) => (
+                <div key={message.id} className={`terminal-line ${message.role}`}>
+                  <span className="prompt">
+                    {message.role === 'user' ? 'you' : 'bot'}:
+                  </span>
+                  <span>{message.content}</span>
+                </div>
+              ))}
+              <form
+                className="terminal-input"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  const value = chatInput.trim()
+                  if (!value) return
+                  const id = `${Date.now()}-${Math.random()}`
+                  const response = buildMockResponse(knowledgeBase, value)
+                  setMessages((prev) => [
+                    ...prev,
+                    { id, role: 'user', content: value },
+                    { id: `${id}-bot`, role: 'bot', content: response }
+                  ])
+                  setChatInput('')
+                }}
+              >
+                <span className="prompt">you:</span>
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(event) => setChatInput(event.target.value)}
+                  placeholder="Ask about WebSockets, APIs, React, etc."
+                />
+                <button type="submit" disabled={!knowledgeBase}>
+                  Send
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
