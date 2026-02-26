@@ -24,12 +24,12 @@ This app transforms public GitHub data into a high‑fidelity, recruiter‑ready
 
 ## 🛠 Tech Stack
 
-| Category | Tools |
-| :-- | :-- |
-| **Frontend** | React + TypeScript + Vite |
-| **Styling** | Custom CSS (Dark Theme) |
-| **API** | GitHub REST API |
-| **Exports** | `html2canvas`, `jsPDF`, `JSZip`, `file-saver` |
+| Category           | Tools                                                 |
+| :----------------- | :---------------------------------------------------- |
+| **Frontend** | React + TypeScript + Vite                             |
+| **Styling**  | Custom CSS (Dark Theme)                               |
+| **API**      | GitHub REST API                                       |
+| **Exports**  | `html2canvas`, `jsPDF`, `JSZip`, `file-saver` |
 
 ---
 
