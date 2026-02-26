@@ -2,56 +2,46 @@
 
 > Turn a GitHub username into a sharp, shareable portfolio in seconds.
 
-Built with **Codex AI**, this tool transforms raw GitHub metadata into a high-fidelity, recruiter-ready professional site. No more manual portfolio updates—just fetch, filter, and export.
+This app transforms public GitHub data into a high‑fidelity, recruiter‑ready portfolio. It includes a recruiter bot (mock AI), deep‑scan knowledge base, smart filters, and export options.
 
 ---
 
 ## ✨ Key Features
 
-* **🧠 Intelligent Parsing**: Automatically extracts your Bio, Profile Stats, and README-based "About" section.
-* **🤖 AI-Powered Summary**: Generates a technical elevator pitch based on your top coding languages and contributions.
-* **🎯 Smart Filtering**: A dedicated **Filter Dropdown** to showcase your "Greatest Hits" by Stars, Activity, or Forks.
-* **📦 One-Click Exports**:
-  * **PNG Snapshot**: Perfect for a quick "flex" on X or LinkedIn.
-  * **Recruiter PDF**: A clean, paginated document for job applications.
-  * **Standalone ZIP**: A portable, static HTML/CSS bundle to host anywhere.
-* **🚦 Rate-Limit Shield**: Integrated **Live Status & Countdown** tracker to manage GitHub's API limits gracefully.
+* **🧠 Intelligent Parsing**: Extracts profile stats, bio, and README‑based About.
+* **🤖 AI Summary**: Generates a concise technical snapshot from public data.
+* **🧪 Recruiter Bot (Mock AI)**: Floating action button opens a draggable terminal‑style chat.
+* **🧠 Knowledge Base**: Built from repo descriptions + READMEs.
+* **🔍 Deep Scan Toggle**: Analyze the full repository library for richer context.
+* **🎯 Smart Filtering**: Filter top repos by Stars, Activity, or Forks.
+* **📦 Share & Export**:
+  * **PNG Snapshot**
+  * **Recruiter PDF**
+  * **Standalone ZIP (static HTML/CSS + data)**
+* **🚦 Rate‑Limit Shield**: Live API status, countdown, and disabled submit on cooldown.
 
 ---
 
 ## 🛠 Tech Stack
 
-| Category              | Tools                                 |
-| :-------------------- | :------------------------------------ |
-| **Frontend**    | React + TypeScript + Vite             |
-| **Styling**     | Tailwind CSS (Dark Mode Optimized)    |
-| **API**         | GitHub REST API                       |
-| **The "Magic"** | Codex AI CLI (Logic Generation)       |
-| **Exports**     | `html2canvas`, `jsPDF`, `JSZip` |
+| Category | Tools |
+| :-- | :-- |
+| **Frontend** | React + TypeScript + Vite |
+| **Styling** | Custom CSS (Dark Theme) |
+| **API** | GitHub REST API |
+| **Exports** | `html2canvas`, `jsPDF`, `JSZip`, `file-saver` |
 
 ---
 
 ## 🚀 Getting Started
 
-1. **Clone & Install**
-   ```bash
-   git clone [https://github.com/your-username/github-portfolio-creator.git](https://github.com/your-username/github-portfolio-creator.git)
-   cd github-portfolio-creator
-   npm install
-
-   ```
-
+```bash
+npm install
 ```
-
-```
-
-2. **Launch Dev Environment**
 
 ```bash
 npm run dev
 ```
-
-3. **Build for Production**
 
 ```bash
 npm run build
@@ -59,31 +49,26 @@ npm run build
 
 ---
 
-## 📸 See it in Action
+## 📸 Screenshots
 
-### The Dashboard
+![Portfolio overview](docs/screenshots/portfolio-overview.png)
+![Repository filters](docs/screenshots/repo-filters.png)
+![Recruiter bot modal](docs/screenshots/recruiter-bot-modal.png)
 
-*Two-column layout designed for maximum readability.*
-![alt text](docs/screenshots/GitHub-Portfolio-Creator.png)
+## 🎥 Demo
 
-### Smart Filtering
+![Demo](docs/demo-recruiter-bot.gif)
 
-*Switch between "Most Starred" and "Most Active" instantly.*
-<!-- paste GIF here showing filters -->
 ---
 
-## 💡 Notes & Usage
+## 💡 Notes
 
-* **No Auth Required**: Designed to work with public data only.
-* **API Awareness**: If you hit a rate limit, the UI will automatically disable inputs and show you exactly when the "cooldown" ends.
-* **Vibe Coding**: This project was scaffolded and refined using the **Codex AI CLI**.
+* **No Auth Required**: Uses public GitHub endpoints only.
+* **Rate Limits**: The UI shows remaining requests and a countdown on limit hits.
+* **Deep Scan**: Loads all repos into the knowledge base (can be slower and hit rate limits faster).
 
 ---
 
 ## 🏆 Credits
 
-Proudly built for the **MakeSomething Workshop**.
-
-```
-
----
+Built for the **MakeSomething Workshop**.
