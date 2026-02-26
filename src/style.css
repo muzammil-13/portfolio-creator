@@ -668,9 +668,43 @@ input:focus {
   z-index: 4;
 }
 
+.fab:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 .fab svg {
   width: 18px;
   height: 18px;
+}
+
+.fab-tooltip {
+  position: fixed;
+  right: 24px;
+  bottom: 78px;
+  background: rgba(30, 31, 46, 0.9);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  z-index: 4;
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.fab:disabled + .fab-tooltip {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.fab:disabled:hover + .fab-tooltip,
+.fab:disabled:focus-visible + .fab-tooltip {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .modal-overlay {

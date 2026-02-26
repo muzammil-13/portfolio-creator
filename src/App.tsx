@@ -369,6 +369,7 @@ export default function App() {
   const [botOpen, setBotOpen] = useState(false)
   const [modalPos, setModalPos] = useState<{ x: number; y: number } | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [kbLoadedOnce, setKbLoadedOnce] = useState(false)
   const [messages, setMessages] = useState<
     { id: string; role: 'user' | 'bot'; content: string }[]
   >([
@@ -389,6 +390,7 @@ export default function App() {
   const rateLimited = rateLimitReset !== null && now < rateLimitReset
   const hasReadme = Boolean(portfolio?.readmeHtml)
   const graphCells = useMemo(() => Array.from({ length: 56 }, (_, i) => i), [])
+  const botDisabled = (rateStatus?.remaining ?? 999) < 10
 
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
@@ -505,6 +507,7 @@ export default function App() {
     setKnowledgeBase(null)
     setBotOpen(false)
     setModalPos(null)
+    setKbLoadedOnce(false)
     setMessages([
       {
         id: 'welcome',
@@ -597,7 +600,8 @@ export default function App() {
   }, [repoCandidates, repoSort])
 
   useEffect(() => {
-    if (!portfolio) return
+    if (!portfolio || !botOpen || kbLoading || kbLoadedOnce) return
+    if (botDisabled) return
     let cancelled = false
     const loadKB = async () => {
       setKbLoading(true)
@@ -611,6 +615,7 @@ export default function App() {
         const kb = await buildKnowledgeBase(portfolio.profile.login, sourceRepos)
         if (!cancelled) {
           setKnowledgeBase(kb)
+          setKbLoadedOnce(true)
         }
       } catch (err) {
         if (err instanceof RateLimitError) {
@@ -624,7 +629,7 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [portfolio, deepScanEnabled])
+  }, [portfolio, botOpen, deepScanEnabled, kbLoading, kbLoadedOnce, botDisabled])
 
   const getInlineStyles = async () => {
     let css = ''
@@ -1191,8 +1196,13 @@ ${css}
       <button
         type="button"
         className="fab"
-        onClick={() => setBotOpen(true)}
+        onClick={() => {
+          if (botDisabled) return
+          setBotOpen(true)
+        }}
         aria-label="Open recruiter bot"
+        disabled={botDisabled}
+        title={botDisabled ? 'Bot sleeping to save API credits.' : 'Open recruiter bot'}
       >
         <span>Bot</span>
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1206,6 +1216,11 @@ ${css}
           />
         </svg>
       </button>
+      {botDisabled && (
+        <div className="fab-tooltip" role="status">
+          Bot sleeping to save API credits.
+        </div>
+      )}
 
       {botOpen && (
         <div className="modal-overlay">
